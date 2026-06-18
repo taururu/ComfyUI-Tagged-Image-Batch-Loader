@@ -204,8 +204,21 @@ class TaggedImageBatchLoader:
     CATEGORY = "Takuro/Image"
 
     @classmethod
-    def VALIDATE_INPUTS(cls, path, csv_filename, dedupe_tags, **kwargs):
-        """キュー投入時に呼ばれる。CSVをここで読んでスナップショットをFIFOキューに積む。"""
+    def VALIDATE_INPUTS(cls, **kwargs):
+        """キュー投入時に呼ばれる。CSVをここで読んでスナップショットをFIFOキューに積む。
+
+        path や csv_filename が他ノードの出力と接続されている場合、
+        ComfyUIはキュー投入時点では実際の値を渡せないため、
+        isinstance チェックで文字列でない場合はスナップショットをスキップして True を返す。
+        """
+        path = kwargs.get("path")
+        csv_filename = kwargs.get("csv_filename")
+        dedupe_tags = kwargs.get("dedupe_tags", True)
+
+        # 接続入力（リンク）の場合は値が文字列でないためスキップ
+        if not isinstance(path, str) or not isinstance(csv_filename, str):
+            return True
+
         try:
             base_path = Path(path).resolve()
             if not base_path.exists():
@@ -308,14 +321,14 @@ class TaggedImageBatchLoader:
         elif mode == "single_image":
             selected_index = index % n
         elif mode == "incremental_image":
-            key = "{}|{}|{}".format(str(base_path), csv_filename, label)
-            if key not in self.COUNTERS:
+            counter_key = "{}|{}|{}".format(str(base_path), csv_filename, label)
+            if counter_key not in self.COUNTERS:
                 # 初回は index を開始位置とする
                 selected_index = index % n
-                self.COUNTERS[key] = selected_index
+                self.COUNTERS[counter_key] = selected_index
             else:
-                selected_index = (self.COUNTERS[key] + 1) % n
-                self.COUNTERS[key] = selected_index
+                selected_index = (self.COUNTERS[counter_key] + 1) % n
+                self.COUNTERS[counter_key] = selected_index
         else:
             raise ValueError("Unknown mode: {}".format(mode))
 

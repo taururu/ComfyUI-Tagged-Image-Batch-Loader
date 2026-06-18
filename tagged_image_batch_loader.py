@@ -3,6 +3,7 @@ import os
 import random
 import re
 import time
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 
@@ -137,6 +138,10 @@ class TaggedImageBatchLoader:
     # key = f"{resolved_path}|{csv_filename}|{label}"
     COUNTERS = {}
 
+    # キュー投入時に撮ったCSVスナップショットのFIFOキュー
+    # key = (resolved_path_str, csv_filename), entries = _parse_csv の結果
+    _CSV_SNAPSHOT_QUEUE = deque(maxlen=200)
+
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -199,6 +204,25 @@ class TaggedImageBatchLoader:
     CATEGORY = "Takuro/Image"
 
     @classmethod
+    def VALIDATE_INPUTS(cls, path, csv_filename, dedupe_tags, **kwargs):
+        """キュー投入時に呼ばれる。CSVをここで読んでスナップショットをFIFOキューに積む。"""
+        try:
+            base_path = Path(path).resolve()
+            if not base_path.exists():
+                return "Path does not exist: {}".format(base_path)
+            csv_path = os.path.join(str(base_path), csv_filename)
+            if not os.path.exists(csv_path):
+                return "CSV file does not exist: {}".format(csv_path)
+            entries = _parse_csv(csv_path, bool(dedupe_tags))
+            if not entries:
+                return "No valid entries found in CSV: {}".format(csv_path)
+            key = (str(base_path), csv_filename)
+            cls._CSV_SNAPSHOT_QUEUE.append((key, entries))
+        except Exception as e:
+            return str(e)
+        return True
+
+    @classmethod
     def IS_CHANGED(cls, **kwargs):
         # キャッシュで再実行が止まらないよう、毎回違う値を返して常に再実行させる
         return time.time()
@@ -250,8 +274,17 @@ class TaggedImageBatchLoader:
         if not os.path.exists(csv_path):
             raise ValueError("CSV file does not exist: {}".format(csv_path))
 
-        # --- CSV読み込み ---
-        entries = _parse_csv(csv_path, dedupe_tags)
+        # --- CSV読み込み（キュー投入時のスナップショットを優先使用）---
+        key = (str(base_path), csv_filename)
+        entries = None
+        for i, (k, e) in enumerate(self._CSV_SNAPSHOT_QUEUE):
+            if k == key:
+                entries = e
+                del self._CSV_SNAPSHOT_QUEUE[i]
+                break
+        if entries is None:
+            # フォールバック: スナップショットがなければディスクから読む
+            entries = _parse_csv(csv_path, dedupe_tags)
         if not entries:
             raise ValueError(
                 "No valid entries found in CSV: {}".format(csv_path)

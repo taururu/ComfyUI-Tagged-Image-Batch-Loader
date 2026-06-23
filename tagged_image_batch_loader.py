@@ -3,7 +3,6 @@ import os
 import random
 import re
 import time
-from collections import deque
 from datetime import datetime
 from pathlib import Path
 
@@ -138,9 +137,9 @@ class TaggedImageBatchLoader:
     # key = f"{resolved_path}|{csv_filename}|{label}"
     COUNTERS = {}
 
-    # キュー投入時に撮ったCSVスナップショットのFIFOキュー
-    # key = (resolved_path_str, csv_filename), entries = _parse_csv の結果
-    _CSV_SNAPSHOT_QUEUE = deque(maxlen=200)
+    # CSVのmtimeキャッシュ: key=(resolved_path_str, csv_filename) → (mtime, entries)
+    # ファイルの更新時刻が変わったときだけ再読み込みする
+    _CSV_CACHE = {}
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -205,17 +204,14 @@ class TaggedImageBatchLoader:
 
     @classmethod
     def VALIDATE_INPUTS(cls, **kwargs):
-        """キュー投入時に呼ばれる。CSVをここで読んでスナップショットをFIFOキューに積む。
+        """キュー投入時に呼ばれる。パスとCSVの存在を早期チェックする。
 
-        path や csv_filename が他ノードの出力と接続されている場合、
-        ComfyUIはキュー投入時点では実際の値を渡せないため、
-        isinstance チェックで文字列でない場合はスナップショットをスキップして True を返す。
+        path/csv_filename が他ノードに接続されている場合は値が文字列でないため、
+        isinstance チェックで非文字列ならスキップして True を返す。
         """
         path = kwargs.get("path")
         csv_filename = kwargs.get("csv_filename")
-        dedupe_tags = kwargs.get("dedupe_tags", True)
 
-        # 接続入力（リンク）の場合は値が文字列でないためスキップ
         if not isinstance(path, str) or not isinstance(csv_filename, str):
             return True
 
@@ -226,11 +222,6 @@ class TaggedImageBatchLoader:
             csv_path = os.path.join(str(base_path), csv_filename)
             if not os.path.exists(csv_path):
                 return "CSV file does not exist: {}".format(csv_path)
-            entries = _parse_csv(csv_path, bool(dedupe_tags))
-            if not entries:
-                return "No valid entries found in CSV: {}".format(csv_path)
-            key = (str(base_path), csv_filename)
-            cls._CSV_SNAPSHOT_QUEUE.append((key, entries))
         except Exception as e:
             return str(e)
         return True
@@ -287,17 +278,17 @@ class TaggedImageBatchLoader:
         if not os.path.exists(csv_path):
             raise ValueError("CSV file does not exist: {}".format(csv_path))
 
-        # --- CSV読み込み（キュー投入時のスナップショットを優先使用）---
-        key = (str(base_path), csv_filename)
-        entries = None
-        for i, (k, e) in enumerate(self._CSV_SNAPSHOT_QUEUE):
-            if k == key:
-                entries = e
-                del self._CSV_SNAPSHOT_QUEUE[i]
-                break
-        if entries is None:
-            # フォールバック: スナップショットがなければディスクから読む
+        # --- CSV読み込み（mtimeキャッシュ）---
+        # ファイルの更新時刻が変わっていなければキャッシュを使い、
+        # 変わっていれば（＝ファイルを差し替えた場合）ディスクから再読み込みする。
+        cache_key = (str(base_path), csv_filename)
+        current_mtime = os.path.getmtime(csv_path)
+        cached = self._CSV_CACHE.get(cache_key)
+        if cached is not None and cached[0] == current_mtime:
+            entries = cached[1]
+        else:
             entries = _parse_csv(csv_path, dedupe_tags)
+            self._CSV_CACHE[cache_key] = (current_mtime, entries)
         if not entries:
             raise ValueError(
                 "No valid entries found in CSV: {}".format(csv_path)

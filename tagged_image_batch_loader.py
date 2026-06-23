@@ -137,9 +137,47 @@ class TaggedImageBatchLoader:
     # key = f"{resolved_path}|{csv_filename}|{label}"
     COUNTERS = {}
 
-    # CSVのmtimeキャッシュ: key=(resolved_path_str, csv_filename) → (mtime, entries)
-    # ファイルの更新時刻が変わったときだけ再読み込みする
-    _CSV_CACHE = {}
+    # キュー投入時(VALIDATE_INPUTS)に撮ったCSVスナップショット。
+    # key = 入力シグネチャ（path/csv/mode/seed/index/label/dedupe_tags）, value = entries
+    # seedをキーに含めることで、ランダムモードではキューごとに固有スロットになり、
+    # 実行時にキュー投入時点のCSV内容を確定して使える。
+    _CSV_SNAPSHOTS = {}
+    # スナップショットの最大保持数（古いものから破棄してメモリ肥大を防ぐ）
+    _MAX_SNAPSHOTS = 1000
+
+    @staticmethod
+    def _snapshot_key(path, csv_filename, mode, seed, index, label, dedupe_tags):
+        """スナップショットを識別する入力シグネチャを作る。
+
+        seed を含めるため、ランダムモードで control_after_generate を
+        randomize にしていると、キュー1件ごとに固有のキーになる。
+        これにより、投入済みキューはそれぞれ投入時点のCSV内容を保持できる。
+        非文字列（他ノード接続時）でも安全にキー化できるよう str() で正規化する。
+        """
+        try:
+            base = str(Path(path).resolve())
+        except Exception:
+            base = str(path)
+        return (
+            base,
+            str(csv_filename),
+            str(mode),
+            str(seed),
+            str(index),
+            str(label),
+            bool(dedupe_tags),
+        )
+
+    @classmethod
+    def _store_snapshot(cls, key, entries):
+        """スナップショットを保存し、上限を超えたら古いものから破棄する。"""
+        # 既存キーは一旦消してから入れ直すことで、再投入を最新扱いにする
+        if key in cls._CSV_SNAPSHOTS:
+            del cls._CSV_SNAPSHOTS[key]
+        cls._CSV_SNAPSHOTS[key] = entries
+        while len(cls._CSV_SNAPSHOTS) > cls._MAX_SNAPSHOTS:
+            oldest = next(iter(cls._CSV_SNAPSHOTS))
+            del cls._CSV_SNAPSHOTS[oldest]
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -204,10 +242,14 @@ class TaggedImageBatchLoader:
 
     @classmethod
     def VALIDATE_INPUTS(cls, **kwargs):
-        """キュー投入時に呼ばれる。パスとCSVの存在を早期チェックする。
+        """キュー投入時に呼ばれる。パス/CSVの存在チェックとスナップショット保存を行う。
+
+        ここはキュー投入時（実行前）に呼ばれるため、この時点でCSVを読み込んで
+        スナップショットとして保存しておく。実行時の load() はこのスナップショットを
+        使うので、投入後にCSVを差し替えても投入済みキューには影響しない。
 
         path/csv_filename が他ノードに接続されている場合は値が文字列でないため、
-        isinstance チェックで非文字列ならスキップして True を返す。
+        isinstance チェックで非文字列ならスナップショット保存はスキップして True を返す。
         """
         path = kwargs.get("path")
         csv_filename = kwargs.get("csv_filename")
@@ -222,6 +264,20 @@ class TaggedImageBatchLoader:
             csv_path = os.path.join(str(base_path), csv_filename)
             if not os.path.exists(csv_path):
                 return "CSV file does not exist: {}".format(csv_path)
+
+            # キュー投入時点のCSV内容を読み、スナップショットとして確定保存する
+            dedupe_tags = kwargs.get("dedupe_tags", True)
+            entries = _parse_csv(csv_path, dedupe_tags)
+            key = cls._snapshot_key(
+                path,
+                csv_filename,
+                kwargs.get("mode"),
+                kwargs.get("seed"),
+                kwargs.get("index"),
+                kwargs.get("label"),
+                dedupe_tags,
+            )
+            cls._store_snapshot(key, entries)
         except Exception as e:
             return str(e)
         return True
@@ -278,17 +334,16 @@ class TaggedImageBatchLoader:
         if not os.path.exists(csv_path):
             raise ValueError("CSV file does not exist: {}".format(csv_path))
 
-        # --- CSV読み込み（mtimeキャッシュ）---
-        # ファイルの更新時刻が変わっていなければキャッシュを使い、
-        # 変わっていれば（＝ファイルを差し替えた場合）ディスクから再読み込みする。
-        cache_key = (str(base_path), csv_filename)
-        current_mtime = os.path.getmtime(csv_path)
-        cached = self._CSV_CACHE.get(cache_key)
-        if cached is not None and cached[0] == current_mtime:
-            entries = cached[1]
-        else:
+        # --- CSV読み込み（キュー投入時のスナップショットを使う）---
+        # VALIDATE_INPUTS がキュー投入時に保存したスナップショットを取り出す。
+        # これにより、投入後にCSVを差し替えても投入済みキューには影響しない。
+        # スナップショットが無い場合（VALIDATE_INPUTS未経由など）はディスクから読む。
+        key = self._snapshot_key(
+            path, csv_filename, mode, seed, index, label, dedupe_tags
+        )
+        entries = self._CSV_SNAPSHOTS.get(key)
+        if entries is None:
             entries = _parse_csv(csv_path, dedupe_tags)
-            self._CSV_CACHE[cache_key] = (current_mtime, entries)
         if not entries:
             raise ValueError(
                 "No valid entries found in CSV: {}".format(csv_path)

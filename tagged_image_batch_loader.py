@@ -132,6 +132,38 @@ def _get_now(timezone):
     return datetime.now()
 
 
+def _snapshot_key_base(path, csv_filename, mode, seed, index, label, dedupe_tags):
+    """スナップショットを識別する入力シグネチャを作る（モジュール共有用）。
+
+    seed を含めるため、ランダムモードで control_after_generate を
+    randomize にしていると、キュー1件ごとに固有のキーになる。
+    非文字列（他ノード接続時）でも安全にキー化できるよう str() で正規化する。
+    """
+    try:
+        base = str(Path(path).resolve())
+    except Exception:
+        base = str(path)
+    return (
+        base,
+        str(csv_filename),
+        str(mode),
+        str(seed),
+        str(index),
+        str(label),
+        bool(dedupe_tags),
+    )
+
+
+def _store_snapshot_to(snapshots_dict, max_snapshots, key, entries):
+    """スナップショットを保存し、上限を超えたら古いものから破棄する（モジュール共有用）。"""
+    if key in snapshots_dict:
+        del snapshots_dict[key]
+    snapshots_dict[key] = entries
+    while len(snapshots_dict) > max_snapshots:
+        oldest = next(iter(snapshots_dict))
+        del snapshots_dict[oldest]
+
+
 class TaggedImageBatchLoader:
     # incremental_image モード用の内部カウンタ
     # key = f"{resolved_path}|{csv_filename}|{label}"
@@ -147,37 +179,13 @@ class TaggedImageBatchLoader:
 
     @staticmethod
     def _snapshot_key(path, csv_filename, mode, seed, index, label, dedupe_tags):
-        """スナップショットを識別する入力シグネチャを作る。
-
-        seed を含めるため、ランダムモードで control_after_generate を
-        randomize にしていると、キュー1件ごとに固有のキーになる。
-        これにより、投入済みキューはそれぞれ投入時点のCSV内容を保持できる。
-        非文字列（他ノード接続時）でも安全にキー化できるよう str() で正規化する。
-        """
-        try:
-            base = str(Path(path).resolve())
-        except Exception:
-            base = str(path)
-        return (
-            base,
-            str(csv_filename),
-            str(mode),
-            str(seed),
-            str(index),
-            str(label),
-            bool(dedupe_tags),
+        return _snapshot_key_base(
+            path, csv_filename, mode, seed, index, label, dedupe_tags
         )
 
     @classmethod
     def _store_snapshot(cls, key, entries):
-        """スナップショットを保存し、上限を超えたら古いものから破棄する。"""
-        # 既存キーは一旦消してから入れ直すことで、再投入を最新扱いにする
-        if key in cls._CSV_SNAPSHOTS:
-            del cls._CSV_SNAPSHOTS[key]
-        cls._CSV_SNAPSHOTS[key] = entries
-        while len(cls._CSV_SNAPSHOTS) > cls._MAX_SNAPSHOTS:
-            oldest = next(iter(cls._CSV_SNAPSHOTS))
-            del cls._CSV_SNAPSHOTS[oldest]
+        _store_snapshot_to(cls._CSV_SNAPSHOTS, cls._MAX_SNAPSHOTS, key, entries)
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -238,7 +246,7 @@ class TaggedImageBatchLoader:
         "selected_index",
     )
     FUNCTION = "load"
-    CATEGORY = "Takuro/Image"
+    CATEGORY = "taururu/Image"
 
     @classmethod
     def VALIDATE_INPUTS(cls, **kwargs):

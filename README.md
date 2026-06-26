@@ -4,10 +4,19 @@
 
 WAS Node Suite などの既存ノードには依存しない、独立した実装です。
 
-## ノードの概要
+## ノード一覧
 
-- ノード表示名: **Tagged Image Batch Loader**
-- カテゴリ: `Takuro/Image`
+このリポジトリには 2 つのノードが含まれています。カテゴリはどちらも `taururu/Image` です。
+
+| ノード表示名 | 概要 |
+|---|---|
+| **Tagged Image Batch Loader** | 画像を 1 枚選択して出力する基本ノード |
+| **Tagged Image Dual Loader** | メイン画像とサブ画像（ファイル名 suffix 付き）を同時に出力するノード |
+
+---
+
+## Tagged Image Batch Loader
+
 - CSV に書かれた画像だけを候補にして、1 枚を選択して読み込みます
 - 選択画像に紐づくタグを CSV から取得し、保存ファイル名に使える `save_prefix` を生成します
 
@@ -123,6 +132,67 @@ output/20260618/Name-A_Dress_Dance_20260618-153020.mp4
 ```
 
 **重要:** `save_prefix` には `output/` を含めません。保存ノードが output 配下に保存する前提のため、相対 prefix として返します。
+
+---
+
+## Tagged Image Dual Loader
+
+全身像と顔のアップなど、**1 エントリにつき 2 枚の画像を同時に出力**したい場合に使うノードです。
+
+CSV は Tagged Image Batch Loader と共通のフォーマットです。CSV の変更は不要で、ファイル名の命名規則だけで 2 枚目を自動取得します。
+
+### ファイル名の命名規則
+
+メイン画像のファイル名（拡張子なし）に `secondary_suffix` を付けたファイルをサブ画像として読み込みます。
+
+```
+hogehoge.jpg      → image（メイン）
+hogehoge_l.jpg    → image_secondary（サブ）
+```
+
+拡張子はメイン画像と同じものが使われます。
+
+### 接続例
+
+```
+[Tagged Image Dual Loader]
+    ├─ image           → 全身像の入力（LTX i2v など）
+    ├─ image_secondary → 顔アップの入力（IPAdapter など）
+    └─ save_prefix     → VHS Video Combine などの filename_prefix
+```
+
+### 追加パラメータ
+
+Tagged Image Batch Loader の全パラメータに加え、以下が追加されます。
+
+| パラメータ | 型 | デフォルト | 説明 |
+|---|---|---|---|
+| `secondary_suffix` | STRING | `_l` | メイン画像のステムに付けるサフィックス |
+| `missing_secondary_policy` | 選択 | `use_main` | サブ画像が存在しない場合の挙動 |
+
+#### `missing_secondary_policy` の選択肢
+
+| 値 | 挙動 |
+|---|---|
+| `use_main` | サブ画像がなければ `image_secondary` にメイン画像をそのまま使う |
+| `skip` | サブ画像がないエントリを CSV 候補から除外する |
+| `error` | サブ画像が見つからなければエラーで停止する |
+
+### 出力一覧
+
+| 出力 | 型 | 説明 |
+|---|---|---|
+| `image` | IMAGE | メイン画像 |
+| `image_secondary` | IMAGE | サブ画像（suffix 付き）。`use_main` 時はメイン画像と同じ |
+| `filename_text` | STRING | メイン画像のファイル名（拡張子あり） |
+| `filename_stem` | STRING | メイン画像の拡張子なしファイル名 |
+| `tag_1` | STRING | 1 つ目のタグ。なければ空文字 |
+| `tag_2` | STRING | 2 つ目のタグ。なければ空文字 |
+| `tags_text` | STRING | 全タグを `tag_separator` で結合した文字列 |
+| `save_prefix` | STRING | 保存ノードの `filename_prefix` に渡す文字列 |
+| `selected_index` | INT | 選択された CSV エントリの 0 始まり index |
+
+---
 
 ## 既知の制限
 

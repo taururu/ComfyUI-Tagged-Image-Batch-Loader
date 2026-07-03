@@ -1,4 +1,7 @@
+import base64
 import csv
+import io
+import json
 import os
 import random
 import re
@@ -14,6 +17,13 @@ try:
     from zoneinfo import ZoneInfo
 except ImportError:  # pragma: no cover - Python < 3.9 fallback
     ZoneInfo = None
+
+try:
+    from aiohttp import web
+    from server import PromptServer
+    _SERVER_AVAILABLE = True
+except Exception:
+    _SERVER_AVAILABLE = False
 
 
 # コメント行の判定に使う接頭辞
@@ -132,6 +142,61 @@ def _get_now(timezone):
     return datetime.now()
 
 
+def _make_thumb_b64(path, size=(96, 96)):
+    """画像を最大 size にリサイズして JPEG base64 文字列で返す。失敗時は None。"""
+    try:
+        with Image.open(path) as img:
+            img = ImageOps.exif_transpose(img).convert("RGB")
+            img.thumbnail(size, Image.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=75)
+            return base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception:
+        return None
+
+
+if _SERVER_AVAILABLE:
+    @PromptServer.instance.routes.get("/taururu/batch_loader/preview")
+    async def batch_loader_preview(request):
+        path         = request.rel_url.query.get("path", "")
+        csv_filename = request.rel_url.query.get("csv_filename", "image_tags.csv")
+
+        try:
+            base_path = Path(path).resolve()
+            if not base_path.exists():
+                return web.json_response(
+                    {"error": "Path does not exist: {}".format(base_path)}, status=400
+                )
+            csv_path = base_path / csv_filename
+            if not csv_path.exists():
+                return web.json_response(
+                    {"error": "CSV not found: {}".format(csv_path)}, status=400
+                )
+            entries = _parse_csv(str(csv_path), dedupe_tags=True)
+        except Exception as e:
+            return web.json_response({"error": str(e)}, status=500)
+
+        result = []
+        for entry in entries:
+            try:
+                image_path = _resolve_safe_image_path(
+                    base_path, entry["filename"], entry["line_no"]
+                )
+            except ValueError:
+                continue
+
+            main_exists = image_path.exists()
+
+            result.append({
+                "filename":    entry["filename"],
+                "main_exists": main_exists,
+                "main_thumb":  _make_thumb_b64(image_path) if main_exists else None,
+                "tags":        entry["tags"],
+            })
+
+        return web.json_response(result)
+
+
 def _snapshot_key_base(path, csv_filename, mode, seed, index, label, dedupe_tags):
     """スナップショットを識別する入力シグネチャを作る（モジュール共有用）。
 
@@ -222,7 +287,10 @@ class TaggedImageBatchLoader:
                     ["error", "skip"],
                 ),
                 "dedupe_tags": ("BOOLEAN", {"default": True}),
-            }
+            },
+            "optional": {
+                "excluded_files": ("STRING", {"default": "[]"}),
+            },
         }
 
     RETURN_TYPES = (
@@ -332,6 +400,7 @@ class TaggedImageBatchLoader:
         timezone,
         missing_file_policy,
         dedupe_tags,
+        excluded_files="[]",
     ):
         # --- パスとCSVの存在確認 ---
         base_path = Path(path).resolve()
@@ -355,6 +424,18 @@ class TaggedImageBatchLoader:
         if not entries:
             raise ValueError(
                 "No valid entries found in CSV: {}".format(csv_path)
+            )
+
+        # --- excluded_files でエントリを絞り込む ---
+        try:
+            excluded = set(json.loads(excluded_files)) if excluded_files.strip() else set()
+        except Exception:
+            excluded = set()
+        if excluded:
+            entries = [e for e in entries if e["filename"] not in excluded]
+        if not entries:
+            raise ValueError(
+                "No entries remain after excluded_files filter."
             )
 
         # --- 画像存在チェック ---

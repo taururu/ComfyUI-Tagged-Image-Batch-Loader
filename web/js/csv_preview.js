@@ -1,6 +1,17 @@
 import { app } from "../../../scripts/app.js";
 import { api } from "../../../scripts/api.js";
 
+const NODE_CONFIG = {
+    TaggedImageBatchLoader: {
+        endpoint: "/taururu/batch_loader/preview",
+        dual: false,
+    },
+    TaggedImageDualLoader: {
+        endpoint: "/taururu/dual_loader/preview",
+        dual: true,
+    },
+};
+
 function getWidgetValue(node, name) {
     const w = node.widgets?.find((w) => w.name === name);
     return w ? w.value : null;
@@ -14,7 +25,7 @@ function setWidgetValue(node, name, value) {
     }
 }
 
-function showPreviewModal(entries, currentExcluded, onApply) {
+function showPreviewModal(entries, currentExcluded, dual, onApply) {
     const overlay = document.createElement("div");
     overlay.style.cssText = [
         "position:fixed", "top:0", "left:0", "width:100%", "height:100%",
@@ -38,6 +49,8 @@ function showPreviewModal(entries, currentExcluded, onApply) {
     const list = document.createElement("div");
     list.style.cssText = "overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:4px;min-height:0;";
 
+    const thumbStyle = "width:48px;height:48px;object-fit:contain;border-radius:3px;background:#333;flex-shrink:0;";
+
     entries.forEach((entry) => {
         const row = document.createElement("div");
         row.style.cssText = [
@@ -51,8 +64,6 @@ function showPreviewModal(entries, currentExcluded, onApply) {
         cb.dataset.filename = entry.filename;
         cb.style.cssText = "width:16px;height:16px;flex-shrink:0;cursor:pointer;";
 
-        const thumbStyle = "width:48px;height:48px;object-fit:contain;border-radius:3px;background:#333;flex-shrink:0;";
-
         const mainImg = document.createElement("img");
         mainImg.style.cssText = thumbStyle;
         if (entry.main_thumb) {
@@ -60,28 +71,32 @@ function showPreviewModal(entries, currentExcluded, onApply) {
         }
         mainImg.title = entry.main_exists ? entry.filename : "(missing)";
 
-        const secImg = document.createElement("img");
-        secImg.style.cssText = thumbStyle;
-        if (entry.secondary_thumb) {
-            secImg.src = "data:image/jpeg;base64," + entry.secondary_thumb;
+        row.appendChild(cb);
+        row.appendChild(mainImg);
+
+        if (dual) {
+            const secImg = document.createElement("img");
+            secImg.style.cssText = thumbStyle;
+            if (entry.secondary_thumb) {
+                secImg.src = "data:image/jpeg;base64," + entry.secondary_thumb;
+            }
+            secImg.title = entry.secondary_exists ? entry.secondary_filename : "(missing)";
+            row.appendChild(secImg);
         }
-        secImg.title = entry.secondary_exists ? entry.secondary_filename : "(missing)";
 
         const info = document.createElement("span");
         info.style.cssText = "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
         const tagsStr = entry.tags.length ? "  [" + entry.tags.join(", ") + "]" : "";
-        const prefix = !entry.main_exists ? "⚠ " : (!entry.secondary_exists ? "△ " : "");
+        const missingSecondary = dual && !entry.secondary_exists;
+        const prefix = !entry.main_exists ? "⚠ " : (missingSecondary ? "△ " : "");
         info.textContent = prefix + entry.filename + tagsStr;
         info.title = entry.filename + tagsStr;
         if (!entry.main_exists) {
             info.style.color = "#f66";
-        } else if (!entry.secondary_exists) {
+        } else if (missingSecondary) {
             info.style.color = "#fa0";
         }
 
-        row.appendChild(cb);
-        row.appendChild(mainImg);
-        row.appendChild(secImg);
         row.appendChild(info);
         list.appendChild(row);
     });
@@ -133,15 +148,15 @@ function showPreviewModal(entries, currentExcluded, onApply) {
 }
 
 app.registerExtension({
-    name: "taururu.DualLoaderPreview",
+    name: "taururu.CsvPreview",
 
     nodeCreated(node) {
-        if (node.comfyClass !== "TaggedImageDualLoader") return;
+        const config = NODE_CONFIG[node.comfyClass];
+        if (!config) return;
 
         node.addWidget("button", "Preview / Reload CSV", null, async () => {
-            const path             = getWidgetValue(node, "path")             ?? "";
-            const csv_filename     = getWidgetValue(node, "csv_filename")     ?? "image_tags.csv";
-            const secondary_suffix = getWidgetValue(node, "secondary_suffix") ?? "_l";
+            const path         = getWidgetValue(node, "path")         ?? "";
+            const csv_filename = getWidgetValue(node, "csv_filename") ?? "image_tags.csv";
 
             let currentExcluded = new Set();
             try {
@@ -151,8 +166,12 @@ app.registerExtension({
 
             let entries;
             try {
-                const params = new URLSearchParams({ path, csv_filename, secondary_suffix });
-                const resp = await api.fetchApi("/taururu/dual_loader/preview?" + params.toString());
+                const query = { path, csv_filename };
+                if (config.dual) {
+                    query.secondary_suffix = getWidgetValue(node, "secondary_suffix") ?? "_l";
+                }
+                const params = new URLSearchParams(query);
+                const resp = await api.fetchApi(config.endpoint + "?" + params.toString());
                 if (!resp.ok) {
                     const err = await resp.json().catch(() => ({ error: resp.statusText }));
                     alert("Preview error: " + (err.error ?? resp.statusText));
@@ -169,7 +188,7 @@ app.registerExtension({
                 return;
             }
 
-            showPreviewModal(entries, currentExcluded, (newExcluded) => {
+            showPreviewModal(entries, currentExcluded, config.dual, (newExcluded) => {
                 setWidgetValue(node, "excluded_files", JSON.stringify([...newExcluded]));
             });
         });

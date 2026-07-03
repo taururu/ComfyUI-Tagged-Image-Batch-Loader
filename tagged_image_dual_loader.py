@@ -1,5 +1,3 @@
-import base64
-import io
 import json
 import random
 import time
@@ -11,6 +9,7 @@ from PIL import Image, ImageOps
 
 from .tagged_image_batch_loader import (
     _get_now,
+    _make_thumb_b64,
     _parse_csv,
     _resolve_safe_image_path,
     _sanitize_filename_part,
@@ -24,19 +23,6 @@ try:
     _SERVER_AVAILABLE = True
 except Exception:
     _SERVER_AVAILABLE = False
-
-
-def _make_thumb_b64(path, size=(96, 96)):
-    """画像を最大 size にリサイズして JPEG base64 文字列で返す。失敗時は None。"""
-    try:
-        with Image.open(path) as img:
-            img = ImageOps.exif_transpose(img).convert("RGB")
-            img.thumbnail(size, Image.LANCZOS)
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=75)
-            return base64.b64encode(buf.getvalue()).decode("ascii")
-    except Exception:
-        return None
 
 
 if _SERVER_AVAILABLE:

@@ -63,6 +63,17 @@ RunPod の初期化ルーチンで上記の場所に `git clone` するだけで
 | `timezone` | STRING | `Asia/Tokyo` | 日時生成に使うタイムゾーン（`zoneinfo` 使用） |
 | `missing_file_policy` | 選択 | `error` | CSV の画像が存在しない場合（`error` / `skip`） |
 | `dedupe_tags` | BOOLEAN | `true` | 同一行内の重複タグを順序保持で除去 |
+| `excluded_files`（optional） | STRING | `[]` | 読み込み候補から除外するファイル名の JSON 配列。通常は下記のプレビュー機能から自動設定 |
+
+## CSV プレビュー機能
+
+ノード上の **"Preview / Reload CSV"** ボタンを押すと、CSV の内容をサムネイル付きでプレビューできます。
+
+- 各行にチェックボックス・サムネイル・ファイル名・タグが一覧表示されます
+- チェックを外したエントリは読み込み候補から除外されます（`excluded_files` に自動保存）
+- ⚠ 赤字はメイン画像が見つからないエントリです
+- **Select All / Select None** で一括切り替え、**Apply** で確定します
+- CSV を差し替えたあとは再度ボタンを押せば最新内容に更新されます
 
 ## 出力一覧
 
@@ -177,6 +188,10 @@ Tagged Image Batch Loader の全パラメータに加え、以下が追加され
 | `use_main` | サブ画像がなければ `image_secondary` にメイン画像をそのまま使う |
 | `skip` | サブ画像がないエントリを CSV 候補から除外する |
 | `error` | サブ画像が見つからなければエラーで停止する |
+
+### CSV プレビュー機能
+
+Tagged Image Batch Loader と同様に **"Preview / Reload CSV"** ボタンでプレビューできます。こちらはメイン画像・サブ画像の両方のサムネイルが並んで表示されます。△ 黄字はサブ画像（`_l` など）が見つからないエントリです。
 
 ### 出力一覧
 

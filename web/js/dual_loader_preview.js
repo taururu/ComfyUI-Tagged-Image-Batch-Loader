@@ -51,7 +51,7 @@ function showPreviewModal(entries, currentExcluded, onApply) {
         cb.dataset.filename = entry.filename;
         cb.style.cssText = "width:16px;height:16px;flex-shrink:0;cursor:pointer;";
 
-        const thumbStyle = "width:48px;height:48px;object-fit:cover;border-radius:3px;background:#333;flex-shrink:0;";
+        const thumbStyle = "width:48px;height:48px;object-fit:contain;border-radius:3px;background:#333;flex-shrink:0;";
 
         const mainImg = document.createElement("img");
         mainImg.style.cssText = thumbStyle;

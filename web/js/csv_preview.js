@@ -123,7 +123,12 @@ function showPreviewModal(entries, currentExcluded, dual, onApply) {
     closeBtn.onclick   = () => document.body.removeChild(overlay);
 
     applyBtn.onclick = () => {
-        const newExcluded = new Set();
+        // 現在のCSVに存在しないファイルの除外設定は保持し、
+        // 表示中のファイルだけをチェック状態で上書きする。
+        const displayedFilenames = new Set(entries.map((e) => e.filename));
+        const newExcluded = new Set(
+            [...currentExcluded].filter((fn) => !displayedFilenames.has(fn))
+        );
         list.querySelectorAll("input[type=checkbox]").forEach((c) => {
             if (!c.checked) newExcluded.add(c.dataset.filename);
         });

@@ -301,6 +301,7 @@ class TaggedImageBatchLoader:
         "STRING",
         "STRING",
         "STRING",
+        "STRING",
         "INT",
     )
     RETURN_NAMES = (
@@ -311,6 +312,7 @@ class TaggedImageBatchLoader:
         "tag_2",
         "tags_text",
         "save_prefix",
+        "filename_body",
         "selected_index",
     )
     FUNCTION = "load"
@@ -494,7 +496,7 @@ class TaggedImageBatchLoader:
         tags_text = tag_separator.join(tags) if tags else ""
 
         # --- save_prefix 生成 ---
-        save_prefix = self._build_save_prefix(
+        save_prefix, filename_body = self._build_save_prefix(
             tags=tags,
             action_text=action_text,
             filename_tag_mode=filename_tag_mode,
@@ -512,6 +514,7 @@ class TaggedImageBatchLoader:
             tag_2,
             tags_text,
             save_prefix,
+            filename_body,
             selected_index,
         )
 
@@ -562,5 +565,7 @@ class TaggedImageBatchLoader:
         safe_date_folder = _sanitize_filename_part(date_folder)
 
         if safe_date_folder:
-            return "{}/{}".format(safe_date_folder, filename_body)
-        return filename_body
+            save_prefix = "{}/{}".format(safe_date_folder, filename_body)
+        else:
+            save_prefix = filename_body
+        return save_prefix, filename_body

@@ -152,6 +152,7 @@ class TaggedImageDualLoader:
         "STRING",
         "STRING",
         "STRING",
+        "STRING",
         "INT",
     )
     RETURN_NAMES = (
@@ -163,6 +164,7 @@ class TaggedImageDualLoader:
         "tag_2",
         "tags_text",
         "save_prefix",
+        "filename_body",
         "selected_index",
     )
     FUNCTION = "load"
@@ -347,7 +349,7 @@ class TaggedImageDualLoader:
         tag_2 = tags[1] if len(tags) >= 2 else ""
         tags_text = tag_separator.join(tags) if tags else ""
 
-        save_prefix = self._build_save_prefix(
+        save_prefix, filename_body = self._build_save_prefix(
             tags=tags,
             action_text=action_text,
             filename_tag_mode=filename_tag_mode,
@@ -366,6 +368,7 @@ class TaggedImageDualLoader:
             tag_2,
             tags_text,
             save_prefix,
+            filename_body,
             selected_index,
         )
 
@@ -425,5 +428,7 @@ class TaggedImageDualLoader:
         safe_date_folder = _sanitize_filename_part(date_folder)
 
         if safe_date_folder:
-            return "{}/{}".format(safe_date_folder, filename_body)
-        return filename_body
+            save_prefix = "{}/{}".format(safe_date_folder, filename_body)
+        else:
+            save_prefix = filename_body
+        return save_prefix, filename_body
